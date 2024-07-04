@@ -1,9 +1,7 @@
 from pathlib import Path
 import yaml
 import torch
-import math
 import os
-import torch.nn as nn
 
 from timm.models.helpers import load_pretrained, load_custom_pretrained
 from timm.models.vision_transformer import default_cfgs
@@ -43,7 +41,7 @@ def create_vit(model_cfg):
     model_cfg = model_cfg.copy()
     backbone = model_cfg.pop("backbone")
 
-    normalization = model_cfg.pop("normalization")
+    model_cfg.pop("normalization")
     model_cfg["n_cls"] = 1000
     mlp_expansion_ratio = 4
     model_cfg["d_ff"] = mlp_expansion_ratio * model_cfg["d_model"]
@@ -58,12 +56,11 @@ def create_vit(model_cfg):
             drop_path_rate=0.0,
             drop_block_rate=None,
         )
-
-    default_cfg["input_size"] = (
+    default_cfg.update({"input_size": (
         3,
         model_cfg["image_size"][0],
         model_cfg["image_size"][1],
-    )
+    )})
     model = VisionTransformer(**model_cfg)
     if backbone == "vit_base_patch8_384":
         path = os.path.expandvars("$TORCH_HOME/hub/checkpoints/vit_base_patch8_384.pth")

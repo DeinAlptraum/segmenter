@@ -2,11 +2,10 @@ import sys
 from pathlib import Path
 import yaml
 import json
-import numpy as np
 import torch
 import click
 import argparse
-from torch.nn.parallel import DistributedDataParallel as DDP
+# from torch.nn.parallel import DistributedDataParallel as DDP
 
 from segm.utils import distributed
 import segm.utils.torch as ptu
@@ -23,6 +22,13 @@ from contextlib import suppress
 from segm.utils.distributed import sync_model
 from segm.engine import train_one_epoch, evaluate
 
+
+def translate_mae_to_segmenter(model_checkpoint):
+    for key in list(model_checkpoint.keys()):
+        if key.startswith("cls_token") or key.startswith("pos_embed") or key.startswith("patch_embed.") or key.startswith("blocks."):
+            model_checkpoint["encoder."+key] = model_checkpoint.pop(key)
+        elif key.startswith("decoder_"):
+            model_checkpoint.pop(key)
 
 @click.command(help="")
 @click.option("--log-dir", type=str, help="logging directory")
@@ -45,6 +51,9 @@ from segm.engine import train_one_epoch, evaluate
 @click.option("--eval-freq", default=None, type=int)
 @click.option("--amp/--no-amp", default=False, is_flag=True)
 @click.option("--resume/--no-resume", default=True, is_flag=True)
+@click.option("--mae", default=False, is_flag=True)
+@click.option("--mae_chp", default="", type=str)
+@click.option("--channels", default=3, type=int)
 def main(
     log_dir,
     dataset,
@@ -66,10 +75,13 @@ def main(
     eval_freq,
     amp,
     resume,
+    mae,
+    mae_chp,
+    channels,
 ):
     # start distributed mode
     ptu.set_gpu_mode(True)
-    distributed.init_process()
+    # distributed.init_process()
 
     # set up configuration
     cfg = config.load_config()
@@ -158,7 +170,11 @@ def main(
 
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = log_dir / "checkpoint.pth"
+    if mae:
+        start_checkpoint_path = log_dir / "mae_pretrain_vit_large.pth"
+        if mae_chp:
+            start_checkpoint_path = Path(mae_chp)
+    save_checkpoint_path = log_dir
 
     # dataset
     dataset_kwargs = variant["dataset_kwargs"]
@@ -174,6 +190,8 @@ def main(
     # model
     net_kwargs = variant["net_kwargs"]
     net_kwargs["n_cls"] = n_cls
+    net_kwargs["channels"] = channels
+    
     model = create_segmenter(net_kwargs)
     model.to(ptu.device)
 
@@ -187,7 +205,6 @@ def main(
         opt_vars[k] = v
     optimizer = create_optimizer(opt_args, model)
     lr_scheduler = create_scheduler(opt_args, optimizer)
-    num_iterations = 0
     amp_autocast = suppress
     loss_scaler = None
     if amp:
@@ -195,24 +212,30 @@ def main(
         loss_scaler = NativeScaler()
 
     # resume
-    if resume and checkpoint_path.exists():
-        print(f"Resuming training from checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        model.load_state_dict(checkpoint["model"])
-        optimizer.load_state_dict(checkpoint["optimizer"])
+    if resume and start_checkpoint_path.exists():
+        print(f"Resuming training from checkpoint: {start_checkpoint_path}")
+        checkpoint = torch.load(start_checkpoint_path, map_location="cpu")
+        if mae:
+            translate_mae_to_segmenter(checkpoint["model"])
+            variant["algorithm_kwargs"]["start_epoch"] = 0
+        else:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+            variant["algorithm_kwargs"]["start_epoch"] = checkpoint["epoch"] + 1
+        model.load_state_dict(checkpoint["model"], strict=not mae)
         if loss_scaler and "loss_scaler" in checkpoint:
             loss_scaler.load_state_dict(checkpoint["loss_scaler"])
-        lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
-        variant["algorithm_kwargs"]["start_epoch"] = checkpoint["epoch"] + 1
     else:
-        sync_model(log_dir, model)
+        pass
+        #raise Exception("Encountered DDP")
+        #sync_model(log_dir, model)
 
     if ptu.distributed:
         model = DDP(model, device_ids=[ptu.device], find_unused_parameters=True)
 
     # save config
     variant_str = yaml.dump(variant)
-    print(f"Configuration:\n{variant_str}")
+    # print(f"Configuration:\n{variant_str}")
     variant["net_kwargs"] = net_kwargs
     variant["dataset_kwargs"] = dataset_kwargs
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -230,11 +253,12 @@ def main(
 
     val_seg_gt = val_loader.dataset.get_gt_seg_maps()
 
-    print(f"Train dataset length: {len(train_loader.dataset)}")
-    print(f"Val dataset length: {len(val_loader.dataset)}")
-    print(f"Encoder parameters: {num_params(model_without_ddp.encoder)}")
-    print(f"Decoder parameters: {num_params(model_without_ddp.decoder)}")
+    # print(f"Train dataset length: {len(train_loader.dataset)}")
+    # print(f"Val dataset length: {len(val_loader.dataset)}")
+    # print(f"Encoder parameters: {num_params(model_without_ddp.encoder)}")
+    # print(f"Decoder parameters: {num_params(model_without_ddp.decoder)}")
 
+    epoch = 0
     for epoch in range(start_epoch, num_epochs):
         # train for one epoch
         train_logger = train_one_epoch(
@@ -246,19 +270,6 @@ def main(
             amp_autocast,
             loss_scaler,
         )
-
-        # save checkpoint
-        if ptu.dist_rank == 0:
-            snapshot = dict(
-                model=model_without_ddp.state_dict(),
-                optimizer=optimizer.state_dict(),
-                n_cls=model_without_ddp.n_cls,
-                lr_scheduler=lr_scheduler.state_dict(),
-            )
-            if loss_scaler is not None:
-                snapshot["loss_scaler"] = loss_scaler.state_dict()
-            snapshot["epoch"] = epoch
-            torch.save(snapshot, checkpoint_path)
 
         # evaluate
         eval_epoch = epoch % eval_freq == 0 or epoch == num_epochs - 1
@@ -292,12 +303,24 @@ def main(
                 "num_updates": (epoch + 1) * len(train_loader),
             }
 
-            with open(log_dir / "log.txt", "a") as f:
+            with open(log_dir / f"log_{start_checkpoint_path.name}.txt", "a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-    distributed.barrier()
-    distributed.destroy_process()
-    sys.exit(1)
+    # save checkpoint
+    if ptu.dist_rank == 0:
+        snapshot = dict(
+            model=model_without_ddp.state_dict(),
+            optimizer=optimizer.state_dict(),
+            n_cls=model_without_ddp.n_cls,
+            lr_scheduler=lr_scheduler.state_dict(),
+        )
+        if loss_scaler is not None:
+            snapshot["loss_scaler"] = loss_scaler.state_dict()
+        snapshot["epoch"] = epoch
+        torch.save(snapshot, save_checkpoint_path/start_checkpoint_path.name)
+
+    # distributed.barrier()
+    # distributed.destroy_process()
 
 
 if __name__ == "__main__":

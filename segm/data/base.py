@@ -34,7 +34,7 @@ class BaseMMSeg(Dataset):
         for k, v in self.normalization.items():
             v = np.round(255 * np.array(v), 2)
             self.normalization[k] = tuple(v)
-        print(f"Use normalization: {self.normalization}")
+        # print(f"Use normalization: {self.normalization}")
 
         config = Config.fromfile(config_path)
 

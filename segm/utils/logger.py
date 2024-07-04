@@ -2,14 +2,12 @@
 https://github.com/facebookresearch/deit/blob/main/utils.py
 """
 
-import io
-import os
 import time
 from collections import defaultdict, deque
 import datetime
 
 import torch
-import torch.distributed as dist
+# import torch.distributed as dist
 
 import segm.utils.torch as ptu
 

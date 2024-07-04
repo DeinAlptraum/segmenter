@@ -2,7 +2,7 @@ import os
 import hostlist
 from pathlib import Path
 import torch
-import torch.distributed as dist
+# import torch.distributed as dist
 
 import segm.utils.torch as ptu
 

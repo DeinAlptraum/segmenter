@@ -23,7 +23,8 @@ def train_one_epoch(
     print_freq = 100
 
     model.train()
-    data_loader.set_epoch(epoch)
+    if ptu.distributed:
+        data_loader.set_epoch(epoch)
     num_updates = epoch * len(data_loader)
     for batch in logger.log_every(data_loader, print_freq, header):
         im = batch["im"].to(ptu.device)
@@ -51,7 +52,7 @@ def train_one_epoch(
         num_updates += 1
         lr_scheduler.step_update(num_updates=num_updates)
 
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
 
         logger.update(
             loss=loss.item(),
@@ -75,7 +76,7 @@ def evaluate(
         model_without_ddp = model.module
     logger = MetricLogger(delimiter="  ")
     header = "Eval:"
-    print_freq = 50
+    print_freq = 100
 
     val_seg_pred = {}
     model.eval()

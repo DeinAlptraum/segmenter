@@ -8,7 +8,7 @@ import shutil
 
 import torch
 import torch.nn.functional as F
-from torch.nn.parallel import DistributedDataParallel as DDP
+# from torch.nn.parallel import DistributedDataParallel as DDP
 
 from segm.utils import distributed
 from segm.utils.logger import MetricLogger
@@ -129,6 +129,7 @@ def eval_dataset(
                 shutil.rmtree(save_dir)
             save_dir.mkdir()
         if ptu.distributed:
+            raise Exception("Encountered DDP")
             torch.distributed.barrier()
 
         for name in sorted(ims):
@@ -158,6 +159,7 @@ def eval_dataset(
             print(f"Saved eval images in {save_dir}.zip")
 
     if ptu.distributed:
+        raise Exception("Encountered DDP")
         torch.distributed.barrier()
         seg_pred_maps = gather_data(seg_pred_maps)
 
@@ -212,7 +214,7 @@ def main(
 
     # start distributed mode
     ptu.set_gpu_mode(True)
-    distributed.init_process()
+    # distributed.init_process()
 
     model, variant = load_model(model_path)
     patch_size = model.patch_size
@@ -257,8 +259,8 @@ def main(
         dataset_kwargs,
     )
 
-    distributed.barrier()
-    distributed.destroy_process()
+    # distributed.barrier()
+    # distributed.destroy_process()
     sys.exit(1)
 
 

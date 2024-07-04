@@ -9,7 +9,6 @@ import torch.nn as nn
 from segm.model.utils import init_weights, resize_pos_embed
 from segm.model.blocks import Block
 
-from timm.models.layers import DropPath
 from timm.models.layers import trunc_normal_
 from timm.models.vision_transformer import _load_weights
 
@@ -30,7 +29,6 @@ class PatchEmbedding(nn.Module):
         )
 
     def forward(self, im):
-        B, C, H, W = im.shape
         x = self.proj(im).flatten(2).transpose(1, 2)
         return x
 
@@ -64,6 +62,7 @@ class VisionTransformer(nn.Module):
         self.n_heads = n_heads
         self.dropout = nn.Dropout(dropout)
         self.n_cls = n_cls
+        self.channels = channels
 
         # cls and pos tokens
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -108,6 +107,10 @@ class VisionTransformer(nn.Module):
     def forward(self, im, return_features=False):
         B, _, H, W = im.shape
         PS = self.patch_size
+
+        if self.channels == 4:
+            mask = torch.ones((B, 1, H, W), device=next(self.parameters()).device)
+            im = torch.cat((im, mask), dim=1)
 
         x = self.patch_embed(im)
         cls_tokens = self.cls_token.expand(B, -1, -1)

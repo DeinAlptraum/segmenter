@@ -94,6 +94,13 @@ model:
     n_heads: 16
     n_layers: 24
     normalization: vit
+  vit_large_mae:
+    image_size: 224
+    patch_size: 16
+    d_model: 1024
+    n_heads: 16
+    n_layers: 24
+    normalization: deit
 decoder:
   linear: {}
   deeplab_dec:
@@ -105,7 +112,7 @@ decoder:
 dataset:
   ade20k:
     epochs: 64
-    eval_freq: 2
+    eval_freq: 4
     batch_size: 8
     learning_rate: 0.001
     im_size: 512

@@ -18,5 +18,4 @@ def check_os_environ(key, use):
 
 
 def dataset_dir():
-    check_os_environ("DATASET", "data loading")
-    return os.environ["DATASET"]
+    return Path(os.path.realpath(__file__)).parents[0] / "../data"

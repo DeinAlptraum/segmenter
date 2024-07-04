@@ -1,14 +1,15 @@
 import torch
 import numpy as np
-import torch.distributed as dist
+# import torch.distributed as dist
 import segm.utils.torch as ptu
 
 import os
 import pickle as pkl
 from pathlib import Path
-import tempfile
 import shutil
 from mmseg.core import mean_iou
+
+from segm.config import dataset_dir
 
 """
 ImageNet classifcation accuracy
@@ -49,21 +50,19 @@ def gather_data(seg_pred, tmp_dir=None):
     prediction and ground truth are stored in a common tmp directory
     and loaded on the master node to compute metrics
     """
-    if tmp_dir is None:
-        tmpprefix = os.path.expandvars("$DATASET/temp")
-    else:
-        tmpprefix = os.path.expandvars(tmp_dir)
+    tmpdir = str(dataset_dir() / "temp")
     MAX_LEN = 512
     # 32 is whitespace
     dir_tensor = torch.full((MAX_LEN,), 32, dtype=torch.uint8, device=ptu.device)
     if ptu.dist_rank == 0:
-        tmpdir = tempfile.mkdtemp(prefix=tmpprefix)
+        os.mkdir(tmpdir)
         tmpdir = torch.tensor(
             bytearray(tmpdir.encode()), dtype=torch.uint8, device=ptu.device
         )
         dir_tensor[: len(tmpdir)] = tmpdir
     # broadcast tmpdir from 0 to to the other nodes
-    dist.broadcast(dir_tensor, 0)
+    if False:
+        dist.broadcast(dir_tensor, 0)
     tmpdir = dir_tensor.cpu().numpy().tobytes().decode().rstrip()
     tmpdir = Path(tmpdir)
     """
@@ -71,7 +70,8 @@ def gather_data(seg_pred, tmp_dir=None):
     """
     tmp_file = tmpdir / f"part_{ptu.dist_rank}.pkl"
     pkl.dump(seg_pred, open(tmp_file, "wb"))
-    dist.barrier()
+    if False:
+        dist.barrier()
     seg_pred = {}
     if ptu.dist_rank == 0:
         for i in range(ptu.world_size):
@@ -87,7 +87,6 @@ def compute_metrics(
     n_cls,
     ignore_index=None,
     ret_cat_iou=False,
-    tmp_dir=None,
     distributed=False,
 ):
     ret_metrics_mean = torch.zeros(3, dtype=float, device=ptu.device)
@@ -107,7 +106,7 @@ def compute_metrics(
         ret_metrics = [ret_metrics["aAcc"], ret_metrics["Acc"], ret_metrics["IoU"]]
         ret_metrics_mean = torch.tensor(
             [
-                np.round(np.nanmean(ret_metric.astype(np.float)) * 100, 2)
+                np.round(np.nanmean(ret_metric.astype(float)) * 100, 2)
                 for ret_metric in ret_metrics
             ],
             dtype=float,
