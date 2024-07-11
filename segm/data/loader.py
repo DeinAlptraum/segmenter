@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader
-# from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data.distributed import DistributedSampler
 
 
 class Loader(DataLoader):

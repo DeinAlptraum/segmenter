@@ -1,20 +1,21 @@
 import sys
+sys.path.append("./segmenter")
 from pathlib import Path
 import yaml
 import json
 import torch
 import click
 import argparse
-# from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
-from segm.utils import distributed
+from segm.utils import distributed as distrib
 import segm.utils.torch as ptu
 from segm import config
 
 from segm.model.factory import create_segmenter
 from segm.optim.factory import create_optimizer, create_scheduler
 from segm.data.factory import create_dataset
-from segm.model.utils import num_params
 
 from timm.utils import NativeScaler
 from contextlib import suppress
@@ -23,12 +24,46 @@ from segm.utils.distributed import sync_model
 from segm.engine import train_one_epoch, evaluate
 
 
-def translate_mae_to_segmenter(model_checkpoint):
+def translate_mae_to_segmenter(model_checkpoint, target_model):
+    # Adapt key naming for preencoder model
+    is_preencoder = False
+    for key in list(model_checkpoint.keys()):
+        if key.startswith("model."):
+            model_checkpoint[key[6:]] = model_checkpoint.pop(key)
+            is_preencoder = True
+    if is_preencoder:
+        model_checkpoint.pop("encoder.weight")
+        model_checkpoint.pop("encoder.bias")
+
+    # Delete surplus keys
     for key in list(model_checkpoint.keys()):
         if key.startswith("cls_token") or key.startswith("pos_embed") or key.startswith("patch_embed.") or key.startswith("blocks."):
             model_checkpoint["encoder."+key] = model_checkpoint.pop(key)
-        elif key.startswith("decoder_"):
+        elif key.startswith("decoder_") or key in ["mask_token", "norm.weight", "norm.bias"]:
             model_checkpoint.pop(key)
+
+    # Add missing keys
+    names = ["norm", "head"]
+    for key in names:
+        model_checkpoint[f"encoder.{key}.weight"] = getattr(target_model.encoder, key).weight.detach()
+        model_checkpoint[f"encoder.{key}.bias"] = getattr(target_model.encoder, key).bias.detach()
+    fnames = ["0.norm1", "0.norm2", "0.attn.qkv", "0.attn.proj", "0.mlp.fc1", "0.mlp.fc2"]
+    names = fnames + [k.replace("0.", "1.") for k in fnames]
+    for key in names:
+        idx = int(key.split(".")[0])
+        rest = key.split(".")[1:]
+        cur = target_model.decoder.blocks[idx]
+        for subkey in rest:
+            cur = getattr(cur, subkey)
+        model_checkpoint[f"decoder.blocks.{key}.weight"] = cur.weight.detach()
+        model_checkpoint[f"decoder.blocks.{key}.bias"] = cur.bias.detach()
+    for key in ["proj_dec", "decoder_norm", "mask_norm"]:
+        model_checkpoint[f"decoder.{key}.weight"] = getattr(target_model.decoder, key).weight.detach()
+        model_checkpoint[f"decoder.{key}.bias"] = getattr(target_model.decoder, key).bias.detach()
+    model_checkpoint["decoder.cls_emb"] = target_model.decoder.cls_emb.detach()
+    model_checkpoint["decoder.proj_patch"] = target_model.decoder.proj_patch.detach()
+    model_checkpoint["decoder.proj_classes"] = target_model.decoder.proj_classes.detach()
+
 
 @click.command(help="")
 @click.option("--log-dir", type=str, help="logging directory")
@@ -81,7 +116,9 @@ def main(
 ):
     # start distributed mode
     ptu.set_gpu_mode(True)
-    # distributed.init_process()
+    if ptu.distributed:
+        distrib.init_process()
+    torch.backends.cudnn.benchmark = True
 
     # set up configuration
     cfg = config.load_config()
@@ -110,7 +147,7 @@ def main(
     model_cfg["decoder"] = decoder_cfg
 
     # dataset config
-    world_batch_size = dataset_cfg["batch_size"]
+    batch_size = dataset_cfg["batch_size"]
     num_epochs = dataset_cfg["epochs"]
     lr = dataset_cfg["learning_rate"]
     if batch_size:
@@ -126,7 +163,7 @@ def main(
         model_cfg["normalization"] = normalization
 
     # experiment config
-    batch_size = world_batch_size // ptu.world_size
+    world_batch_size = batch_size * ptu.world_size
     variant = dict(
         world_batch_size=world_batch_size,
         version="normal",
@@ -216,31 +253,26 @@ def main(
         print(f"Resuming training from checkpoint: {start_checkpoint_path}")
         checkpoint = torch.load(start_checkpoint_path, map_location="cpu")
         if mae:
-            translate_mae_to_segmenter(checkpoint["model"])
+            translate_mae_to_segmenter(checkpoint["model"], model)
             variant["algorithm_kwargs"]["start_epoch"] = 0
         else:
             optimizer.load_state_dict(checkpoint["optimizer"])
             lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
             variant["algorithm_kwargs"]["start_epoch"] = checkpoint["epoch"] + 1
-        model.load_state_dict(checkpoint["model"], strict=not mae)
+        model.load_state_dict(checkpoint["model"])
         if loss_scaler and "loss_scaler" in checkpoint:
             loss_scaler.load_state_dict(checkpoint["loss_scaler"])
     else:
-        pass
-        #raise Exception("Encountered DDP")
-        #sync_model(log_dir, model)
+        raise Exception("This shouldn't happen because we only resume from pretraining checkpoints")
+        sync_model(log_dir, model)
 
     if ptu.distributed:
         model = DDP(model, device_ids=[ptu.device], find_unused_parameters=True)
 
     # save config
-    variant_str = yaml.dump(variant)
-    # print(f"Configuration:\n{variant_str}")
     variant["net_kwargs"] = net_kwargs
     variant["dataset_kwargs"] = dataset_kwargs
     log_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_dir / "variant.yml", "w") as f:
-        f.write(variant_str)
 
     # train
     start_epoch = variant["algorithm_kwargs"]["start_epoch"]
@@ -252,11 +284,6 @@ def main(
         model_without_ddp = model.module
 
     val_seg_gt = val_loader.dataset.get_gt_seg_maps()
-
-    # print(f"Train dataset length: {len(train_loader.dataset)}")
-    # print(f"Val dataset length: {len(val_loader.dataset)}")
-    # print(f"Encoder parameters: {num_params(model_without_ddp.encoder)}")
-    # print(f"Decoder parameters: {num_params(model_without_ddp.decoder)}")
 
     epoch = 0
     for epoch in range(start_epoch, num_epochs):
@@ -319,8 +346,9 @@ def main(
         snapshot["epoch"] = epoch
         torch.save(snapshot, save_checkpoint_path/start_checkpoint_path.name)
 
-    # distributed.barrier()
-    # distributed.destroy_process()
+    if ptu.distributed:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

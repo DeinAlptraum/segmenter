@@ -1,18 +1,17 @@
 import numpy as np
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter
 
-import torch
 from torch.utils.data import Dataset
-import torchvision.transforms.functional as F
 
-from mmseg.datasets import build_dataset
-import mmcv
-from mmcv.utils import Config
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from mmseg.datasets import build_dataset
+    import mmcv
+    from mmcv.utils import Config
 
 
 from segm.data.utils import STATS, IGNORE_LABEL
-from segm.data import utils
 
 
 class BaseMMSeg(Dataset):
@@ -34,7 +33,6 @@ class BaseMMSeg(Dataset):
         for k, v in self.normalization.items():
             v = np.round(255 * np.array(v), 2)
             self.normalization[k] = tuple(v)
-        # print(f"Use normalization: {self.normalization}")
 
         config = Config.fromfile(config_path)
 

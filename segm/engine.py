@@ -52,7 +52,7 @@ def train_one_epoch(
         num_updates += 1
         lr_scheduler.step_update(num_updates=num_updates)
 
-        # torch.cuda.synchronize()
+        torch.cuda.synchronize()
 
         logger.update(
             loss=loss.item(),

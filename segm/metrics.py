@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-# import torch.distributed as dist
+import torch.distributed as dist
 import segm.utils.torch as ptu
 
 import os
@@ -61,7 +61,7 @@ def gather_data(seg_pred, tmp_dir=None):
         )
         dir_tensor[: len(tmpdir)] = tmpdir
     # broadcast tmpdir from 0 to to the other nodes
-    if False:
+    if ptu.distributed:
         dist.broadcast(dir_tensor, 0)
     tmpdir = dir_tensor.cpu().numpy().tobytes().decode().rstrip()
     tmpdir = Path(tmpdir)
@@ -70,7 +70,7 @@ def gather_data(seg_pred, tmp_dir=None):
     """
     tmp_file = tmpdir / f"part_{ptu.dist_rank}.pkl"
     pkl.dump(seg_pred, open(tmp_file, "wb"))
-    if False:
+    if ptu.distributed:
         dist.barrier()
     seg_pred = {}
     if ptu.dist_rank == 0:
