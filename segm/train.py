@@ -263,8 +263,9 @@ def main(
         if loss_scaler and "loss_scaler" in checkpoint:
             loss_scaler.load_state_dict(checkpoint["loss_scaler"])
     else:
-        raise Exception("This shouldn't happen because we only resume from pretraining checkpoints")
-        sync_model(log_dir, model)
+        pass
+        # raise Exception("This shouldn't happen because we only resume from pretraining checkpoints")
+        # sync_model(log_dir, model)
 
     if ptu.distributed:
         model = DDP(model, device_ids=[ptu.device], find_unused_parameters=True)
