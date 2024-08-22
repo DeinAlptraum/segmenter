@@ -109,7 +109,7 @@ class VisionTransformer(nn.Module):
         PS = self.patch_size
 
         if self.channels == 4:
-            mask = torch.ones((B, 1, H, W), device=next(self.parameters()).device)
+            mask = torch.zeros((B, 1, H, W), device=next(self.parameters()).device)
             im = torch.cat((im, mask), dim=1)
 
         x = self.patch_embed(im)
