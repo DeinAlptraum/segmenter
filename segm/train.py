@@ -89,6 +89,7 @@ def translate_mae_to_segmenter(model_checkpoint, target_model):
 @click.option("--mae", default=False, is_flag=True)
 @click.option("--mae_chp", default="", type=str)
 @click.option("--channels", default=3, type=int)
+@click.option("--prefix", default="sth", type=str)
 def main(
     log_dir,
     dataset,
@@ -113,6 +114,7 @@ def main(
     mae,
     mae_chp,
     channels,
+    prefix,
 ):
     # start distributed mode
     ptu.set_gpu_mode(True)
@@ -309,6 +311,7 @@ def main(
                 window_size,
                 window_stride,
                 amp_autocast,
+                prefix,
             )
             print(f"Stats [{epoch}]:", eval_logger, flush=True)
             print("")

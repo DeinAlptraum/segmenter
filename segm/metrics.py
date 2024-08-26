@@ -44,18 +44,18 @@ https://github.com/open-mmlab/mmsegmentation/blob/master/mmseg/apis/test.py#L160
 """
 
 
-def gather_data(seg_pred, tmp_dir=None):
+def gather_data(seg_pred, prefix=None):
     """
     distributed data gathering
     prediction and ground truth are stored in a common tmp directory
     and loaded on the master node to compute metrics
     """
-    tmpdir = str(dataset_dir() / "temp")
+    tmpdir = str(dataset_dir() / "temp" / prefix)
     MAX_LEN = 512
     # 32 is whitespace
     dir_tensor = torch.full((MAX_LEN,), 32, dtype=torch.uint8, device=ptu.device)
     if ptu.dist_rank == 0:
-        os.mkdir(tmpdir)
+        os.makedirs(tmpdir)
         tmpdir = torch.tensor(
             bytearray(tmpdir.encode()), dtype=torch.uint8, device=ptu.device
         )

@@ -70,6 +70,7 @@ def evaluate(
     window_size,
     window_stride,
     amp_autocast,
+    prefix,
 ):
     model_without_ddp = model
     if hasattr(model, "module"):
@@ -102,7 +103,7 @@ def evaluate(
         seg_pred = seg_pred.cpu().numpy()
         val_seg_pred[filename] = seg_pred
 
-    val_seg_pred = gather_data(val_seg_pred)
+    val_seg_pred = gather_data(val_seg_pred, prefix)
     scores = compute_metrics(
         val_seg_pred,
         val_seg_gt,
